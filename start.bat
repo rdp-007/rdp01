@@ -1,49 +1,114 @@
-@echo off
+name: WINDOWS LATEST RDP
 
-REM set "NGROK_URL=%~1"
-REM if "%NGROK_URL%"=="" set "NGROK_URL=null"
-REM set "USERNAME=%~2"
-REM if "%USERNAME%"=="" set "USERNAME=runneradmin"
-REM set "PASSWORD=%~3"
-REM if "%PASSWORD%"=="" set "PASSWORD=OLDUSER-SER"
+on:
+  workflow_dispatch:
+    inputs:
+      increment:
+        type: string
+        description: 'ngrok token (Optional if secret TAKEN is set)'
+        required: false
+        default: ''
 
-:: set "NGROK_URL=%~1"
-:: if not defined NGROK_URL set "NGROK_URL=null"
-:: set "USERNAME=%~2"
-::if not defined USERNAME set "USERNAME=runneradmin"
-::set "PASSWORD=%~3"
-::if not defined PASSWORD set "PASSWORD=OLDUSER-SER"
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 9999
 
-REM set "NGROK_URL=%~1" & if "%NGROK_URL%"=="" set "NGROK_URL=null"
-:: set "USERNAME=%~2" & if "%USERNAME%"=="" set "USERNAME=runneradmin"
-REM set "PASSWORD=%~3" & if "%PASSWORD%"=="" set "PASSWORD=OLDUSER-SER"
+    steps:
+      - name: 🔽 Checkout Repository
+        uses: actions/checkout@v4
 
-set "NGROK_URL=%~1"
-if not defined NGROK_URL set "NGROK_URL=null"
-set "USERNAME=%~2"
-if not defined USERNAME set "USERNAME=runneradmin"
-set "PASSWORD=%~3"
-if not defined PASSWORD set "PASSWORD=OLDUSER-SER"
-set "OS_VERSION=%~4"
-if not defined OS_VERSION set "OS_VERSION=2019"
+      - name: 🔽 Download Ngrok
+        run: |
+          Invoke-WebRequest https://equinox.io -OutFile ngrok.zip
 
-del /f "C:\Users\Public\Desktop\Epic Games Launcher.lnk" > out.txt 2>&1
-net config server /srvcomment:"Windows Server %OS_VERSION% By administrator" > out.txt 2>&1
-REG ADD "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /V EnableAutoTray /T REG_DWORD /D 0 /F > out.txt 2>&1
-REG ADD "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /f /v Wallpaper /t REG_SZ /d D:\a\wallpaper.bat
-net user "%USERNAME%" "%PASSWORD%" /add > nul
-net localgroup administrators "%USERNAME%" /add >nul
-net user administrator /active:yes >nul
-net user installer /delete
-diskperf -Y >nul
-sc config Audiosrv start= auto >nul
-sc start audiosrv >nul
-ICACLS C:\Windows\Temp /grant "%USERNAME%" :F >nul
-ICACLS C:\Windows\installer /grant "%USERNAME%" :F >nul
-echo Successfully installed! If RDP is dead, rebuild again.
-echo Setup complete!
-echo Ngrok Tunnel URL/IP: "%NGROK_URL%"
-echo Username: "%USERNAME%"
-echo Password: "%PASSWORD%"
-echo You can now log in via RDP or terminal."
-ping -n 10 127.0.0.1 >nul
+      - name: 📦 Extract Ngrok
+        run: Expand-Archive ngrok.zip -DestinationPath .\ngrok_extracted
+
+      - name: 🔐 Set Ngrok Authtoken
+        shell: pwsh
+        run: |
+          $inputToken = '${{ github.event.inputs.increment }}'
+          $envToken = $Env:NGROK_AUTH
+          if ($inputToken) {
+            $token = $inputToken
+          } elseif ($envToken) {
+            $token = $envToken
+          } else {
+            Write-Host "❌ No ngrok token provided! Please set TAKEN secret or provide it as manual input."
+            exit 1
+          }
+          Write-Host "Using ngrok token: $($token.Substring(0,[Math]::Min(10,$token.Length)))***"
+          
+          $ngrokExe = (Get-ChildItem -Path .\ngrok_extracted -Filter ngrok.exe -Recurse | Select-Object -First 1).FullName
+          & $ngrokExe config add-authtoken $token
+        env:
+          NGROK_AUTH: ${{ secrets.TAKEN }}
+
+      - name: 🔧 Enable RDP & Configure Firewall
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          Copy-Item wallpaper.bat D:\a\wallpaper.bat -ErrorAction SilentlyContinue
+
+      - name: 🚀 Start Ngrok Tunnel (Hidden Window)
+        shell: pwsh
+        run: |
+          $ngrokExe = (Get-ChildItem -Path .\ngrok_extracted -Filter ngrok.exe -Recurse | Select-Object -First 1).FullName
+          Start-Process -FilePath $ngrokExe -ArgumentList "tcp", "--region", "ap", "3389" -NoNewWindow
+
+      - name: 🔎 Verify Ngrok process is running
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 3
+          $proc = Get-Process -Name ngrok -ErrorAction SilentlyContinue
+          if ($proc) {
+            Write-Host "✅ Ngrok process is running (PID: $($proc.Id))"
+          } else {
+            Write-Host "❌ Ngrok process NOT found or crashed immediately!"
+            exit 1
+          }
+
+      - name: 🕐 Wait for Ngrok to Initialize
+        shell: pwsh
+        run: Start-Sleep -Seconds 20
+
+      - name: ⚙️ Run Setup Script (start.bat) with NGROK URL + credentials
+        shell: pwsh
+        run: |
+          $retries = 10
+          $url = $null
+          while ($retries -gt 0 -and -not $url) {
+            try {
+              $tunnels = Invoke-RestMethod -Uri 'http://localhost:4040/api/tunnels' -ErrorAction Stop
+              if ($tunnels.tunnels.Count -gt 0) {
+                $url = $tunnels.tunnels[0].public_url
+              }
+            } catch {}
+            if (-not $url) { Start-Sleep -Seconds 3 }
+            $retries--
+          }
+
+          if (-not $url) {
+            Write-Host "❌ Could not fetch Ngrok URL. Check ngrok process and authtoken."
+            exit 1
+          }
+
+          Write-Host "✅ Ngrok Public URL: $url"
+
+          $escapedUrl = $url.Replace('"', '\"')
+          $escapedUser = 'administrator'.Replace('"','\"')
+          $escapedPass = 'OLDUSER#06'.Replace('"','\"')
+          $osVersion = 'Latest'
+
+          $cmd = ".\start.bat `"$escapedUrl`" `"$escapedUser`" `"$escapedPass`" `"$osVersion`""
+          cmd.exe /c $cmd
+
+      - name: 🌐 Debug Ngrok API response raw
+        shell: pwsh
+        run: curl.exe -s http://localhost:4040/api/tunnels | Write-Host
+
+      - name: 🔁 Keep Runner Alive
+        shell: pwsh
+        run: .\loop.bat
