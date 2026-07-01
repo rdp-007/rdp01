@@ -5,7 +5,7 @@ on:
     inputs:
       increment:
         type: string
-        description: 'ngrok token (Optional if secret TAKEN is set)'
+        description: 'ngrok token'
         required: false
         default: ''
 
@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: 🔽 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/actions/checkout@v4
 
       - name: 🔽 Download Ngrok
         run: |
@@ -35,7 +35,7 @@ jobs:
           } elseif ($envToken) {
             $token = $envToken
           } else {
-            Write-Host "❌ No ngrok token provided! Please set TAKEN secret or provide it as manual input."
+            Write-Host "❌ No ngrok token provided! Please set NGROK_AUTH secret or provide it as input."
             exit 1
           }
           Write-Host "Using ngrok token: $($token.Substring(0,[Math]::Min(10,$token.Length)))***"
@@ -66,7 +66,7 @@ jobs:
           if ($proc) {
             Write-Host "✅ Ngrok process is running (PID: $($proc.Id))"
           } else {
-            Write-Host "❌ Ngrok process NOT found or crashed immediately!"
+            Write-Host "❌ Ngrok process NOT found!"
             exit 1
           }
 
