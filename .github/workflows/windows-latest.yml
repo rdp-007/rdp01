@@ -23,7 +23,7 @@ jobs:
           Invoke-WebRequest https://equinox.io -OutFile ngrok.zip
 
       - name: 📦 Extract Ngrok
-        run: Expand-Archive ngrok.zip -DestinationPath .\ngrok_extracted
+        run: Expand-Archive -Path .\ngrok.zip -DestinationPath .\ngrok_extracted -Force
 
       - name: 🔐 Set Ngrok Authtoken
         shell: pwsh
